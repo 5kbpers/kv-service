@@ -1,0 +1,7 @@
+[package]
+name = "kv-service"
+version = "0.1.0"
+authors = ["5kbpers"]
+edition = "2018"
+
+[dependencies]

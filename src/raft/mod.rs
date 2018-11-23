@@ -2,6 +2,7 @@ mod storage;
 mod rpc;
 mod util;
 
+use bincode::{serialize, deserialize};
 use self::storage::Storage;
 use self::rpc::Client;
 use std::sync::{Arc, Mutex};
@@ -24,7 +25,7 @@ enum Message {
     HeartbeatReply(AppendEntriesReply),
 }
 
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct LogEntry {
     pub index: u64,
     pub term: u64,
@@ -38,6 +39,7 @@ pub struct ApplyMsg {
     pub command: Vec<u8>,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct RequestVoteArgs {
     pub term: u64,
     pub candidate_id: u64,
@@ -45,11 +47,13 @@ pub struct RequestVoteArgs {
     pub last_log_term: u64,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct RequestVoteReply {
     pub term: u64,
     pub vote_granted: bool,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct AppendEntriesArgs {
     pub term: u64,
     pub leader_id: u64,
@@ -58,6 +62,7 @@ pub struct AppendEntriesArgs {
     pub leader_commit: u64,
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct AppendEntriesReply {
     pub term: u64,
     pub success: bool,
@@ -93,14 +98,14 @@ impl Raft {
     // create a new raft node.
     pub fn new(
         id: i32,
-        prs: &Vec<Client>,
+        prs: Vec<Client>,
         apply_ch: &SyncSender<ApplyMsg>
     ) -> Arc<Mutex<Raft>> {
         let (ns, nr) = mpsc::sync_channel(1);
         let (ms, mr) = mpsc::sync_channel(1);
         let r = Raft {
             storage: Storage::new(),
-            peers: prs.clone(),
+            peers: prs,
             me: id,
             leader_id: -1,
             state: State::Follower,
@@ -168,10 +173,19 @@ impl Raft {
 
     // call AppendEntries RPC of one peer.
     fn send_append_entries(&self, id: i32) {
+
     }
 
     // call RequestVote RPC of one peer.
     fn send_request_vote(&self, id: i32) {
+        // let req =  RequestVoteArgs {
+        //     term : 123,
+        //     candidate_id : 2,
+        //     last_log_index : 12,
+        //     last_log_term : 4,
+        // };
+        // let req = serialize(&req).unwrap();
+        // client12.Call(String::from("Raft.RequestVote"), req);
     }
 
     // send committed log to apply.
@@ -195,5 +209,78 @@ impl Raft {
     // send log entries to one follower.
     // only call by leader.
     fn sendLogEntries(&self, id: i32) {
+    }
+
+}
+
+pub fn RequestVote(args : Vec<u8>) -> (Vec<u8>, bool) {
+    //args *RequestVoteArgs, reply *RequestVoteReply
+    let req : RequestVoteArgs = deserialize(&args[..]).unwrap();    
+    println!("call RequestVote, args:{:?}", args);
+    (Vec::new(), true)
+
+
+    // let reply : RequestVoteReply;
+    // let reply = serialize(&reply).unwrap();
+    // (reply, true)
+}
+
+pub fn AppendEntries(args : Vec<u8>) -> (Vec<u8>, bool) {
+    //args *RequestVoteArgs, reply *RequestVoteReply
+    let req : AppendEntriesArgs = deserialize(&args[..]).unwrap();    
+    println!("call AppendEntries, args:{:?}", args);
+    (Vec::new(), true)
+
+
+    // let reply : RequestVoteReply;
+    // let reply = serialize(&reply).unwrap();
+    // (reply, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::thread;
+
+    #[test]
+    fn raft_works() {
+        let rpcFunc = rpc::RpcFunc {
+            vote : RequestVote,
+            append : AppendEntries,
+            add_two : |x| {
+                x + 2
+            },
+        };
+
+        let rn1 = rpc::MakeNetwork(String::from("127.0.0.1:7801"), rpcFunc.clone());
+        let rn2 = rpc::MakeNetwork(String::from("127.0.0.1:7802"), rpcFunc.clone());
+        let rn3 = rpc::MakeNetwork(String::from("127.0.0.1:7803"), rpcFunc.clone());
+        
+        // let mut client11 = rpc::make_end(&rn1, String::from("client12"), String::from("127.0.0.1:7801"));
+        let mut client12 = rpc::make_end(&rn1, String::from("client12"), String::from("127.0.0.1:7802"));
+        let mut client13 = rpc::make_end(&rn1, String::from("client13"), String::from("127.0.0.1:7803"));
+        let mut client11 = client12.clone();
+
+        let mut client21 = rpc::make_end(&rn1, String::from("client21"), String::from("127.0.0.1:7801"));
+        // let mut client22 = rpc::make_end(&rn1, String::from("client21"), String::from("127.0.0.1:7802"));
+        let mut client23 = rpc::make_end(&rn1, String::from("client23"), String::from("127.0.0.1:7803"));
+        let mut client22 = client21.clone();
+
+        let mut client31 = rpc::make_end(&rn1, String::from("client31"), String::from("127.0.0.1:7801"));
+        let mut client32 = rpc::make_end(&rn1, String::from("client32"), String::from("127.0.0.1:7802"));                
+        // let mut client33 = rpc::make_end(&rn1, String::from("client33"), String::from("127.0.0.1:7803"));
+        let mut client33 = client31.clone();
+
+
+        let req =  RequestVoteArgs {
+            term : 123,
+            candidate_id : 2,
+            last_log_index : 12,
+            last_log_term : 4,
+        };
+        let req = serialize(&req).unwrap();
+        client12.Call(String::from("Raft.RequestVote"), req);
+
+        println!("raft test ok");
     }
 }

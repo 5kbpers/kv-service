@@ -41,7 +41,7 @@ pub struct Client {
 }
 
 impl Client {
-	pub fn Call(&mut self, svcMeth : String, args : Vec<u8>) -> (Vec<u8>, bool) {
+	pub fn Call(&self, svcMeth : String, args : Vec<u8>) -> (Vec<u8>, bool) {
 		let req = reqMsg {
 			endname : self.endname.clone(),
 			svcMeth : svcMeth,

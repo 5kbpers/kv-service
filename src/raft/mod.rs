@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, sync_channel, Receiver};
 use std::thread;
 use std::time::Duration;
 
@@ -16,8 +16,10 @@ mod util;
 
 const HEARBEAT_INTERVAL: u64 = 50;
 //const ELECTION_TIMEOUT:u64 = 1000;
-const MIN_TIMEOUT: u64 = 300;
-const MAX_TIMEOUT: u64 = 600;
+const MIN_TIMEOUT: u64 = 1500;
+const MAX_TIMEOUT: u64 = 2000;
+
+const CALLBACK_NUMS : u32 = 2;
 
 pub enum State {
     Follower,
@@ -101,21 +103,25 @@ pub struct Raft {
 //    message_ch: SyncSender<Message>,
 
     pub voted_cnt: i32, // voted count during a election
+
+    reply_sender : Vec<SyncSender<(Vec<u8>, bool)>>,
 }
 
 impl Raft {
     // create a new raft node.
     pub fn new(
         id: i32,
-        prs: Vec<Client>,
+        addr : &Vec<String>,
         apply_ch: &SyncSender<ApplyMsg>,
     ) -> Arc<Mutex<Raft>> {
+        let (peers, reply_sendv, mut req_recvv) = Self::create_server(addr, id);
+
 //        let (ns, nr) = mpsc::sync_channel(1);
 //        let (ms, mr) = mpsc::sync_channel(1);
         let (ts, tr) = mpsc::sync_channel(1);
-        let r = Raft {
+        let mut r = Raft {
             storage: Storage::new(),
-            peers: prs,
+            peers: peers,
             me: id,
             leader_id: -1,
             state: Follower,
@@ -136,8 +142,15 @@ impl Raft {
 //            message_ch: ms,
             voted_cnt: 0,
             election_timer: ts,
+            reply_sender : reply_sendv,
         };
+        r.next_index = vec![0,0,0,0,0];
+        r.match_index = vec![0,0,0,0,0];
+        println!("########## match len: {}", r.match_index.len());
         let ret = Arc::new(Mutex::new(r));
+
+        Self::register_callback(&ret, req_recvv);
+
         let arc_r = ret.clone();
         // election daemon
         thread::spawn(move || { Self::tick_election(tr, arc_r) });
@@ -161,8 +174,10 @@ impl Raft {
     }
 
     // implement AppendEntries RPC.
-    pub fn append_entries(r: Arc<Mutex<Raft>>, args: &mut AppendEntriesArgs) -> AppendEntriesReply {
+    pub fn append_entries(r: &Arc<Mutex<Raft>>, args: &mut AppendEntriesArgs) -> AppendEntriesReply {
         let mut rf = r.lock().unwrap();
+        println!("run append_entries in id {}", rf.me);
+
         let mut reply = AppendEntriesReply {
             success: false, // success only if leader is valid and prev entry matched
             term: rf.current_term,
@@ -219,11 +234,13 @@ impl Raft {
     }
 
     // implement RequestVote RPC.
-    pub fn request_vote(r: Arc<Mutex<Raft>>, args: &RequestVoteArgs) -> RequestVoteReply {
+    pub fn request_vote(r: &Arc<Mutex<Raft>>, args: &RequestVoteArgs) -> RequestVoteReply {
         let mut rf = r.lock().unwrap();
+        // println!("run request_vote in id {}", rf.me);
         let mut reply = RequestVoteReply { term: rf.current_term, vote_granted: false };
         if args.term < rf.current_term {
             // reject because candidate expired
+            println!("{} refuse for term to {}", rf.me, args.candidate_id);
             return reply;
         }
 
@@ -238,6 +255,7 @@ impl Raft {
         };
 
         if !up_to_date {
+            println!("{} refuse for log entry not up to date to {}", rf.me, args.candidate_id);
             return reply;
         }
 
@@ -252,7 +270,11 @@ impl Raft {
             rf.election_timer.send(());
             rf.state = Follower;
             reply.vote_granted = true;
+            println!("grant server {} to {}", rf.me, args.candidate_id);
             rf.vote_for = args.candidate_id;
+        }
+        if reply.vote_granted == false {
+            println!("aaaaaaa\n");
         }
         reply
     }
@@ -289,7 +311,7 @@ impl Raft {
 //        let args = RequestVoteArgs { term: rf.current_term, candidate_id: rf.me, last_log_index: last_index, last_log_term: last_term };
 
         // send request to every peer
-        for i in 0..rf.peers.len() - 1 {
+        for i in 0..rf.peers.len() {
             if i as i32 == rf.me {
                 continue;
             }
@@ -297,19 +319,24 @@ impl Raft {
             let args = RequestVoteArgs { term: rf.current_term, candidate_id: rf.me, last_log_index: last_index, last_log_term: last_term };
             thread::spawn(move || {
                 let r1 = r1;
+                println!("lock before send request");
                 let mut rf1 = r1.lock().unwrap();
+                println!("{} locked before send request", rf1.me);
                 match rf1.send_request_vote(i as i32, args) {
                     // got reply
                     Ok(reply) => {
+                        println!("{} get reply", rf1.me);
                         if let Candidate = rf1.state {
                             //got voted
                             if reply.vote_granted {
                                 rf1.voted_cnt += 1;
+                                println!("{} get voted {}", rf1.me,rf1.voted_cnt);
                                 // win
-                                if rf1.voted_cnt as usize == rf1.log.len() / 2 {
+                                if rf1.voted_cnt as usize == rf1.peers.len() / 2 {
                                     rf1.state = Leader;
+                                    println!("I am leader {}",rf1.me);
                                     // initiate leader state
-                                    for i in 0..rf1.peers.len() - 1 {
+                                    for i in 0..rf1.peers.len() {
                                         rf1.match_index[i] = 0;
                                         rf1.next_index[i] = rf1.log.len();
                                     }
@@ -322,6 +349,7 @@ impl Raft {
                                     });
                                 }
                             } else {
+                                println!("{} didnt get voted", rf1.me);
                                 if reply.term > rf1.current_term {
                                     rf1.state = Follower;
                                     rf1.election_timer.send(());  // reset timer
@@ -330,8 +358,8 @@ impl Raft {
                             }
                         }
                     }
-                    Err(str) => {
-                        println!("no reply while send vote request to {}, error:{}", i,str);
+                    Err(_) => {
+                        println!("no reply while send vote request to {}", i);
                     }
                 }
             });
@@ -356,6 +384,11 @@ impl Raft {
         let (reply, success) = self.peers[id as usize].Call(String::from("Raft.RequestVote"), req);
         if success {
             let reply: RequestVoteReply = deserialize(&reply).unwrap();
+            if reply.vote_granted {
+                println!("granted {} from id {}", self.me, id);
+            } else {
+                println!("not granted {} from id {}", self.me, id);
+            }
             return Ok(reply);
         }
         Err("get request vote rpc reply error")
@@ -372,11 +405,13 @@ impl Raft {
     fn tick_heartbeat(r: Arc<Mutex<Raft>>) {
         while true {
             {
+                println!("broadcast before lock");
                 let rf = r.lock().unwrap();
+                println!("{} broadcast", rf.me);
                 if let Leader = rf.state {
                     rf.election_timer.send(());  //reset timer so leader won't start another election
                     // broadcast
-                    for i in 0..rf.peers.len()-1 {
+                    for i in 0..rf.peers.len() {
                         if i == rf.me as usize {
                             continue;
                         }
@@ -405,7 +440,7 @@ impl Raft {
                         thread::spawn(move||{
                             let mut rf1 = r1.lock().unwrap();
                             let num_entries = args.entries.len();
-                            match rf1.send_append_entries(rf1.me, args) {
+                            match rf1.send_append_entries(i as i32, args) {
                                 Ok(reply) => {
                                     if let Leader = rf1.state {
                                         if reply.success {
@@ -426,8 +461,8 @@ impl Raft {
                                         }
                                     }
                                 }
-                                Err(str) => {
-                                    println!("no reply while send vote request to {}, error:{}", i,str);
+                                Err(_) => {
+                                    println!("no reply while send vote request to {}", i);
                                 }
                             }
                         });
@@ -446,7 +481,10 @@ impl Raft {
             match receiver.recv_timeout(Self::random_timeout(MIN_TIMEOUT, MAX_TIMEOUT)) {
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => {
-                    println!("timeout, start election!");
+                    {
+                        let rf = r.lock().unwrap();
+                        println!("{} timeout, start election!",rf.me);
+                    }
                     let r1 = r.clone();
                     thread::spawn(move || { Self::campaign(r1) });
                 },
@@ -482,7 +520,7 @@ impl Raft {
     fn commit_to_index(r: Arc<Mutex<Raft>>,index: usize) {
         let mut rf = r.lock().unwrap();
         if rf.commit_index < index {
-            for i in rf.commit_index+1..index {
+            for i in rf.commit_index+1..index+1 {
                 if i<rf.log.len() {
                     rf.commit_index = i;
                     let msg = ApplyMsg{
@@ -491,7 +529,8 @@ impl Raft {
                         index:i,
                         term:rf.log[i].term,
                     };
-                    rf.apply_ch.send(msg);
+                    //TODO
+                    // rf.apply_ch.send(msg);
                 }
             }
         }
@@ -513,96 +552,100 @@ impl Raft {
         let timeout = rand::thread_rng().gen_range(min, max);
         Duration::from_millis(timeout)
     }
-}
-
-pub fn RequestVote(args: Vec<u8>) -> (Vec<u8>, bool) {
-    //args *RequestVoteArgs, reply *RequestVoteReply
-    let req: RequestVoteArgs = deserialize(&args[..]).unwrap();
-    println!("call RequestVote, args:{:?}", args);
-    (Vec::new(), true)
 
 
-    // let reply : RequestVoteReply;
-    // let reply = serialize(&reply).unwrap();
-    // (reply, true)
-}
+    fn register_callback(r: &Arc<Mutex<Raft>>,  mut req_receiver : Vec<Receiver<Vec<u8>>>) {
+        let rr = r.clone();
+        let req_receiver0 = req_receiver.remove(0);
+        thread::spawn(move || { //RequestVote
+            loop {
+                let args = req_receiver0.recv().unwrap();
+                
+                let req : RequestVoteArgs = deserialize(&args[..]).unwrap();
+                let reply = Self::request_vote(&rr, &req);
+                let vote_granted = reply.vote_granted;
+                let reply = serialize(&reply).unwrap();
 
-pub fn AppendEntries(args: Vec<u8>) -> (Vec<u8>, bool) {
-    //args *RequestVoteArgs, reply *RequestVoteReply
-    let req: AppendEntriesArgs = deserialize(&args[..]).unwrap();
-    println!("call AppendEntries, args:{:?}", args);
-    (Vec::new(), true)
+                let r1 = rr.lock().unwrap();
+                r1.reply_sender[0].send((reply, true)).unwrap();
+            }
+        });
+        let rr = r.clone();
+        let req_receiver1 = req_receiver.remove(0);
+        thread::spawn(move || { //AppendEntries
+            loop {
+                let args = req_receiver1.recv().unwrap();
+                
+                let mut req : AppendEntriesArgs = deserialize(&args[..]).unwrap();
+                let reply = Self::append_entries(&rr, &mut req);
+                let reply = serialize(&reply).unwrap();
 
+                let r1 = rr.lock().unwrap();
+                r1.reply_sender[1].send((reply, true)).unwrap();
+            }
+        });
+    }
 
-    // let reply : RequestVoteReply;
-    // let reply = serialize(&reply).unwrap();
-    // (reply, true)
+    fn create_server(addrs : &Vec<String>, cur_id : i32) -> (Vec<Client>, Vec<SyncSender<(Vec<u8>, bool)>>, Vec<Receiver<Vec<u8>>>) {
+        let mut req_sendv = Vec::new();
+        let mut reply_sendv = Vec::new();
+        let mut req_recvv = Vec::new();
+        let mut reply_recvv = Vec::new();
+        
+        for i in (0..CALLBACK_NUMS) {
+            let (req_send, req_recv) = sync_channel(1);
+            let (reply_send, reply_recv) = sync_channel(1);
+
+            req_sendv.push(req_send);
+            reply_sendv.push(reply_send);
+            req_recvv.push(req_recv);
+            reply_recvv.push(reply_recv);
+        }
+
+        let rn1 = rpc::make_network(addrs[cur_id as usize].clone(), req_sendv, reply_recvv);
+
+        println!("creating server {}", cur_id);
+        thread::sleep(Duration::from_secs(1));
+
+        let mut clients = Vec::new();
+        for j in (0..addrs.len()) {
+            if cur_id as usize == j {
+                clients.push(Client::new());
+            } else {
+                let client = rpc::make_end(&rn1, format!("client{}to{}", cur_id, j), addrs[j].clone());
+                clients.push(client);
+            }
+        }
+
+        (clients, reply_sendv, req_recvv)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::thread;
-
     use super::*;
 
     #[test]
-    fn raft_works() {
-        let rpcFunc = rpc::RpcFunc {
-            vote: RequestVote,
-            append: AppendEntries,
-            add_two: |x| {
-                x + 2
-            },
-        };
+    fn raft_test() {
+        let server_num = 5;
+        let mut base_port = 8810;
+        let mut addrs = Vec::new();
+        for i in (0..server_num) {
+            addrs.push(format!("127.0.0.1:{}", base_port));
+            base_port += 1;
+        }
+        let aaddrs = Arc::new(addrs);
 
-        let rn1 = rpc::MakeNetwork(String::from("127.0.0.1:7801"), rpcFunc.clone());
-        let rn2 = rpc::MakeNetwork(String::from("127.0.0.1:7802"), rpcFunc.clone());
-        let rn3 = rpc::MakeNetwork(String::from("127.0.0.1:7803"), rpcFunc.clone());
+        for i in (0..server_num) {
+            let aaddrs1 = aaddrs.clone();
+            thread::spawn(move || {
+                let (sx, rx) = sync_channel(1);
+                let raft = Raft::new(i, &aaddrs1, &sx);
+                thread::sleep(Duration::from_secs(60));
+            });
+        }
 
-        // let mut client11 = rpc::make_end(&rn1, String::from("client12"), String::from("127.0.0.1:7801"));
-        let mut client12 = rpc::make_end(&rn1, String::from("client12"), String::from("127.0.0.1:7802"));
-        let mut client13 = rpc::make_end(&rn1, String::from("client13"), String::from("127.0.0.1:7803"));
-        let mut client11 = client12.clone();
-
-        let mut client21 = rpc::make_end(&rn1, String::from("client21"), String::from("127.0.0.1:7801"));
-        // let mut client22 = rpc::make_end(&rn1, String::from("client21"), String::from("127.0.0.1:7802"));
-        let mut client23 = rpc::make_end(&rn1, String::from("client23"), String::from("127.0.0.1:7803"));
-        let mut client22 = client21.clone();
-
-        let mut client31 = rpc::make_end(&rn1, String::from("client31"), String::from("127.0.0.1:7801"));
-        let mut client32 = rpc::make_end(&rn1, String::from("client32"), String::from("127.0.0.1:7802"));
-        // let mut client33 = rpc::make_end(&rn1, String::from("client33"), String::from("127.0.0.1:7803"));
-        let mut client33 = client31.clone();
-
-
-        let req = RequestVoteArgs {
-            term: 123,
-            candidate_id: 2,
-            last_log_index: 12,
-            last_log_term: 4,
-        };
-        let req = serialize(&req).unwrap();
-        client12.Call(String::from("Raft.RequestVote"), req);
-
-        println!("raft test ok");
-    }
-
-    #[test]
-    fn test_make() {
-        let rpcFunc = rpc::RpcFunc {
-            vote: RequestVote,
-            append: AppendEntries,
-            add_two: |x| {
-                x + 2
-            },
-        };
-        let rn1 = rpc::MakeNetwork(String::from("127.0.0.1:8000"), rpcFunc.clone());
-
-        let mut client12 = rpc::make_end(&rn1, String::from("client12"), String::from("127.0.0.1:7802"));
-        let mut client13 = rpc::make_end(&rn1, String::from("client13"), String::from("127.0.0.1:7803"));
-        let (cs, cr) = mpsc::sync_channel(1);
-        let clients: Vec<Client> = vec![client12, client13];
-        let rf1 = Raft::new(0, clients, &cs);
-        thread::sleep(Duration::from_secs(10));
+        thread::sleep(Duration::from_secs(60));
     }
 }

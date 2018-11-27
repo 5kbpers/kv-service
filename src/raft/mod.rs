@@ -16,8 +16,8 @@ mod util;
 
 const HEARBEAT_INTERVAL: u64 = 50;
 //const ELECTION_TIMEOUT:u64 = 1000;
-const MIN_TIMEOUT: u64 = 1500;
-const MAX_TIMEOUT: u64 = 2000;
+const MIN_TIMEOUT: u64 = 200;
+const MAX_TIMEOUT: u64 = 400;
 
 const CALLBACK_NUMS : u32 = 4;
 
@@ -151,9 +151,8 @@ impl Raft {
             election_timer: ts,
             reply_sender : reply_sendv,
         };
-        r.next_index = vec![0,0,0,0,0];
-        r.match_index = vec![0,0,0,0,0];
-        println!("########## match len: {}", r.match_index.len());
+        r.next_index.resize(r.peers.len(),0);
+        r.match_index.resize(r.peers.len(),0);
         let ret = Arc::new(Mutex::new(r));
 
         Self::register_callback(&ret, req_recvv);
@@ -183,7 +182,7 @@ impl Raft {
     // implement AppendEntries RPC.
     pub fn append_entries(r: &Arc<Mutex<Raft>>, args: &mut AppendEntriesArgs) -> AppendEntriesReply {
         let mut rf = r.lock().unwrap();
-        println!("run append_entries in id {}", rf.me);
+        // println!("run append_entries in id {}", rf.me);
 
         let mut reply = AppendEntriesReply {
             success: false, // success only if leader is valid and prev entry matched
@@ -365,7 +364,7 @@ impl Raft {
                         }
                     }
                     Err(_) => {
-                        println!("no reply while send vote request to {}", i);
+                        // println!("no reply while send vote request to {}", i);
                     }
                 }
             });
@@ -406,9 +405,9 @@ impl Raft {
     fn tick_heartbeat(r: Arc<Mutex<Raft>>) {
         while true {
             {
-                println!("broadcast before lock");
+                // println!("broadcast before lock");
                 let rf = r.lock().unwrap();
-                println!("{} broadcast", rf.me);
+                println!("leader {} broadcast", rf.me);
                 if let Leader = rf.state {
                     rf.election_timer.send(());  //reset timer so leader won't start another election
                     // broadcast
@@ -611,12 +610,12 @@ impl Raft {
 
         let mut clients = Vec::new();
         for j in (0..addrs.len()) {
-            if cur_id as usize == j {
-                clients.push(Client::new());
-            } else {
+            // if cur_id as usize == j {
+            //     clients.push(Client::new());
+            // } else {
                 let client = rpc::make_end(&rn1, format!("client{}to{}", cur_id, j), addrs[j].clone());
                 clients.push(client);
-            }
+            // }
         }
 
         (clients, reply_sendv, req_recvv)

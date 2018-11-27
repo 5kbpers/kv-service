@@ -62,12 +62,12 @@ impl Client {
                 return (reply.reply, reply.ok);
             }
             else {
-                println!("[RPC] read from {} error", &self.server_addr);
+                // println!("[RPC] read from {} error", &self.server_addr);
                 return (Vec::new(), false);
             }
         }
         else {
-            println!("[RPC] can not connect to {}", &self.server_addr);
+            // println!("[RPC] can not connect to {}", &self.server_addr);
             return (Vec::new(), false);
         }
     }

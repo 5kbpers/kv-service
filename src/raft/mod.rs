@@ -11,7 +11,7 @@ use self::State::{Candidate, Follower, Leader};
 use self::storage::Storage;
 
 mod storage;
-mod rpc;
+pub mod rpc;
 mod util;
 
 const HEARBEAT_INTERVAL: u64 = 50;
@@ -19,7 +19,7 @@ const HEARBEAT_INTERVAL: u64 = 50;
 const MIN_TIMEOUT: u64 = 1500;
 const MAX_TIMEOUT: u64 = 2000;
 
-const CALLBACK_NUMS : u32 = 2;
+const CALLBACK_NUMS : u32 = 4;
 
 pub enum State {
     Follower,
@@ -113,8 +113,15 @@ impl Raft {
         id: i32,
         addr : &Vec<String>,
         apply_ch: &SyncSender<ApplyMsg>,
-    ) -> Arc<Mutex<Raft>> {
-        let (peers, reply_sendv, mut req_recvv) = Self::create_server(addr, id);
+    ) -> (Arc<Mutex<Raft>>, Client, Vec<SyncSender<(Vec<u8>, bool)>>, Vec<Receiver<Vec<u8>>>) {
+        let (peers, mut reply_sendv, mut req_recvv) = Self::create_server(addr, id);
+        
+        let put_reply = reply_sendv.pop().unwrap();
+        let get_reply = reply_sendv.pop().unwrap();
+
+        let put_req = req_recvv.pop().unwrap();
+        let get_req = req_recvv.pop().unwrap();
+        let client = peers[id as usize].clone();
 
 //        let (ns, nr) = mpsc::sync_channel(1);
 //        let (ms, mr) = mpsc::sync_channel(1);
@@ -154,7 +161,7 @@ impl Raft {
         let arc_r = ret.clone();
         // election daemon
         thread::spawn(move || { Self::tick_election(tr, arc_r) });
-        ret
+        (ret, client, vec![get_reply, put_reply], vec![get_req, put_req])
     }
 
     // start to execute a command.

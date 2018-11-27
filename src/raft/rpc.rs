@@ -110,6 +110,7 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
     };
 
         rn.servers.insert(String::from("Raft"), true);
+        rn.servers.insert(String::from("KV"), true);
 
         let rn = Arc::new(rn);
         let rnt = rn.clone();

@@ -51,16 +51,25 @@ impl Client {
 			args_type : String::from("bin"),
 			args : args,
 		};
-println!("server_addr: {}", &self.server_addr);
-	    let mut ch = TcpStream::connect(self.server_addr.clone()).unwrap();
 
-		let req = serialize(&req).unwrap();
-	    ch.write(&req).unwrap();
+	    if let Ok(mut ch) = TcpStream::connect(self.server_addr.clone()) {
+			let req = serialize(&req).unwrap();
+		    ch.write(&req).unwrap();
 
-	    let mut buffer = [0; 4096];
-	    let size = ch.read(&mut buffer).unwrap();
-		let reply : replyMsg = deserialize(&buffer[..size]).unwrap();    
-	    (reply.reply, reply.ok)
+		    let mut buffer = [0; 4096];
+		    if let Ok(size) = ch.read(&mut buffer) {
+				let reply : replyMsg = deserialize(&buffer[..size]).unwrap();    
+			    return (reply.reply, reply.ok);
+		    }
+		    else {
+		    	println!("[RPC] read from {} error", &self.server_addr);
+		    	return (Vec::new(), false);
+		    }
+	    }
+	    else {
+	    	println!("[RPC] can not connect to {}", &self.server_addr);
+	    	return (Vec::new(), false);
+	    }
 	}
 }
 
@@ -110,8 +119,15 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
 	    let listener = TcpListener::bind(addr).unwrap();
 
 	    for stream in listener.incoming() {
-	        let stream = stream.unwrap();
-			        handle_connection(&rnt, stream);
+	        match stream {
+	        	Ok(mut streamm) => {
+	        		match handle_connection(&rnt, streamm) {
+	        			Ok(_) => (),
+	        			Err(err) => println!("{:?}", err),
+	        		}
+	        	},
+	        	Err(err) => println!("{:?}", err),
+	        }
 	        // thread::spawn(move || {
 	        // 	loop {
 	        // 	}
@@ -123,16 +139,17 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
 	rn
 }
 
-fn handle_connection(rn : &ANetwork, mut stream: TcpStream) {
+fn handle_connection(rn : &ANetwork, mut stream: TcpStream) -> Result<(), std::io::Error> {
     let mut buffer = [0; 4096];
-    let size = stream.read(&mut buffer).unwrap();
+    let size = stream.read(&mut buffer)?;
 	let req : reqMsg = deserialize(&buffer[..size]).unwrap();    
 
     let replyMsg = dispatch(rn, req);
 
     let replyMsg = serialize(&replyMsg).unwrap();
     
-    let rcount = stream.write(&replyMsg).unwrap();
+    let rcount = stream.write(&replyMsg)?;
+    Ok(())
 }
 
 fn dispatch(rn : &ANetwork, req : reqMsg) -> replyMsg {

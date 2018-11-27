@@ -274,7 +274,7 @@ impl Raft {
             rf.vote_for = args.candidate_id;
         }
         if reply.vote_granted == false {
-            println!("aaaaaaa\n");
+            println!("{} refuse {} because already voted for {}\n",rf.me, args.candidate_id, rf.vote_for);
         }
         reply
     }
@@ -316,25 +316,24 @@ impl Raft {
                 continue;
             }
             let r1 = r.clone();
+            let client = rf.peers[i].clone();
             let args = RequestVoteArgs { term: rf.current_term, candidate_id: rf.me, last_log_index: last_index, last_log_term: last_term };
+            // send requests
             thread::spawn(move || {
-                let r1 = r1;
-                println!("lock before send request");
-                let mut rf1 = r1.lock().unwrap();
-                println!("{} locked before send request", rf1.me);
-                match rf1.send_request_vote(i as i32, args) {
+                match Self::send_request_vote(&client, i as i32, args) {
                     // got reply
                     Ok(reply) => {
-                        println!("{} get reply", rf1.me);
+                        let mut rf1 = r1.lock().unwrap();
+                        println!("{} get reply from {}", rf1.me, i);
                         if let Candidate = rf1.state {
                             //got voted
                             if reply.vote_granted {
                                 rf1.voted_cnt += 1;
-                                println!("{} get voted {}", rf1.me,rf1.voted_cnt);
+                                println!("{} get voted {} times", rf1.me,rf1.voted_cnt);
                                 // win
                                 if rf1.voted_cnt as usize == rf1.peers.len() / 2 {
                                     rf1.state = Leader;
-                                    println!("I am leader {}",rf1.me);
+                                    println!("{} is leader of term {}",rf1.me,rf1.current_term);
                                     // initiate leader state
                                     for i in 0..rf1.peers.len() {
                                         rf1.match_index[i] = 0;
@@ -349,7 +348,7 @@ impl Raft {
                                     });
                                 }
                             } else {
-                                println!("{} didnt get voted", rf1.me);
+                                println!("{} didnt get voted from {}", rf1.me, i);
                                 if reply.term > rf1.current_term {
                                     rf1.state = Follower;
                                     rf1.election_timer.send(());  // reset timer
@@ -367,9 +366,9 @@ impl Raft {
     }
 
     // call AppendEntries RPC of one peer.
-    fn send_append_entries(&self, id: i32, args: AppendEntriesArgs) -> Result<AppendEntriesReply, &'static str> {
+    fn send_append_entries(client:&Client, id: i32, args: AppendEntriesArgs) -> Result<AppendEntriesReply, &'static str> {
         let req = serialize(&args).unwrap();
-        let (reply, success) = self.peers[id as usize].Call(String::from("Raft.AppendEntries"),req);
+        let (reply, success) = client.Call(String::from("Raft.AppendEntries"),req);
         if success {
             let reply: AppendEntriesReply = deserialize(&reply).unwrap();
             return Ok(reply);
@@ -378,17 +377,12 @@ impl Raft {
     }
 
     // call RequestVote RPC of one peer.
-    fn send_request_vote(&self, id: i32, args: RequestVoteArgs) -> Result<RequestVoteReply, &'static str> {
+    fn send_request_vote(client: &Client, id: i32, args: RequestVoteArgs) -> Result<RequestVoteReply, &'static str> {
 //        let reply = RequestVoteReply{term:0, vote_granted:false};
         let req = serialize(&args).unwrap();
-        let (reply, success) = self.peers[id as usize].Call(String::from("Raft.RequestVote"), req);
+        let (reply, success) = client.Call(String::from("Raft.RequestVote"), req);
         if success {
             let reply: RequestVoteReply = deserialize(&reply).unwrap();
-            if reply.vote_granted {
-                println!("granted {} from id {}", self.me, id);
-            } else {
-                println!("not granted {} from id {}", self.me, id);
-            }
             return Ok(reply);
         }
         Err("get request vote rpc reply error")
@@ -437,11 +431,12 @@ impl Raft {
 
                         // start send append rpc to each server
                         let r1 = r.clone();
+                        let client = rf.peers[i].clone();
                         thread::spawn(move||{
-                            let mut rf1 = r1.lock().unwrap();
                             let num_entries = args.entries.len();
-                            match rf1.send_append_entries(i as i32, args) {
+                            match Self::send_append_entries(&client, i as i32, args) {
                                 Ok(reply) => {
+                                    let mut rf1 = r1.lock().unwrap();
                                     if let Leader = rf1.state {
                                         if reply.success {
                                             // update index state and try to commit

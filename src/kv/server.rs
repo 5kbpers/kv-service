@@ -8,7 +8,7 @@ use super::super::raft::rpc::{self, Client};
 use super::common::*;
 use bincode::{serialize, deserialize};
 
-const START_TIMEOUT_INTERVAL: u64 = 3000; // ms
+const START_TIMEOUT_INTERVAL: u64 = 400; // ms
 const CALLBACK_NUMS: usize = 4;
 
 struct NotifyArgs {
@@ -32,7 +32,7 @@ impl KVServer {
         id: i32,
         addrs: &Vec<String>,
         maxraftstate: u64,
-        ) -> (Arc<Mutex<KVServer>>, Client) {
+        ) -> Client {
         let (s, r) = mpsc::sync_channel(1000);
         let (rf, client, reply_sender, req_recv)= Raft::new(id, addrs, &s);
         let kv = KVServer {
@@ -45,9 +45,8 @@ impl KVServer {
         };
         let kv = Arc::new(Mutex::new(kv));
         Self::register_callback(&kv, reply_sender, req_recv);
-        let kv_rc = kv.clone();
-        thread::spawn(move || { Self::run(kv_rc, r); });
-        (kv, client)
+        thread::spawn(move || { Self::run(kv, r); });
+        client
     }
 
     pub fn get(mu: Arc<Mutex<KVServer>>, args: &ReqArgs) -> GetReply {
@@ -79,7 +78,7 @@ impl KVServer {
             index = i;
             term = t;
             if ok == false {
-                return (RespErr::OK, String::from(""));
+                return (RespErr::ErrWrongLeader, String::from(""));
             }
             let (sh, rh) = mpsc::sync_channel(0);
             notify_ch = rh;
@@ -96,12 +95,13 @@ impl KVServer {
             Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
                 let mut kv = mu.lock().unwrap();
                 kv.notify_ch_map.remove(&index);
+                return (RespErr::ErrWrongLeader,  String::from(""));
             }
         }
-        return (RespErr::OK, String::from(""));
     }
 
     fn apply(&mut self, msg :&ApplyMsg) {
+        println!("---------------apply");
         let mut result = NotifyArgs{
             term: msg.term,
             value: String::from(""),
@@ -145,6 +145,7 @@ impl KVServer {
     fn run(mu: Arc<Mutex<KVServer>>, apply_ch: Receiver<ApplyMsg>) {
         loop {
             let msg = apply_ch.recv();
+            println!("--------receive message");
             match msg {
                 Ok(m) => {
                     let mut kv = mu.lock().unwrap();
@@ -158,8 +159,8 @@ impl KVServer {
     }
 
     fn register_callback(
-        kv: &Arc<Mutex<KVServer>>, 
-        mut reply_sender: Vec<SyncSender<(Vec<u8>, bool)>>, 
+        kv: &Arc<Mutex<KVServer>>,
+        mut reply_sender: Vec<SyncSender<(Vec<u8>, bool)>>,
         mut req_recv: Vec<Receiver<Vec<u8>>>
     ) {
         let kv1 = kv.clone();
@@ -168,7 +169,7 @@ impl KVServer {
         thread::spawn(move || { //RequestVote
             loop {
                 let args = get_req.recv().unwrap();
-                
+
                 let req : ReqArgs = deserialize(&args[..]).unwrap();
                 let reply = Self::get(kv1.clone(), &req);
                 let reply = serialize(&reply).unwrap();
@@ -182,7 +183,7 @@ impl KVServer {
         thread::spawn(move || { //RequestVote
             loop {
                 let args = put_req.recv().unwrap();
-                
+
                 let req : ReqArgs = deserialize(&args[..]).unwrap();
                 let reply = Self::put_append(kv2.clone(), &req);
                 let reply = serialize(&reply).unwrap();

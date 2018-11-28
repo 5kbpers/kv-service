@@ -32,14 +32,14 @@ impl Clerk {
         };
         let req = serialize(&args).unwrap();
         loop {
-            println!("--------send get rpc to {}", self.leader_id);
+//            println!("--------send get rpc to {}", self.leader_id);
             let (reply, success) = self.servers[self.leader_id as usize].Call(
                 String::from("KV.Get"),
                 req.clone(),
                 );
             if success {
                 let reply: GetReply = deserialize(&reply).unwrap();
-                println!("--------receive get rpc response: {:?}", reply);
+//                println!("--------receive get rpc response: {:?}", reply);
                 match reply.err {
                     RespErr::OK => return reply.value,
                     RespErr::ErrWrongLeader => (),
@@ -72,14 +72,14 @@ impl Clerk {
         };
         let req = serialize(&args).unwrap();
         loop {
-            println!("--------send put rpc to {}", self.leader_id);
+//            println!("--------send put rpc to {}", self.leader_id);
             let (reply, success) = self.servers[self.leader_id as usize].Call(
                 String::from("KV.PutAppend"),
                 req.clone(),
                 );
             if success {
                 let reply: PutAppendReply = deserialize(&reply).unwrap();
-                println!("--------receive put rpc response, {:?}", reply);
+//                println!("--------receive put rpc response, {:?}", reply);
                 match reply.err {
                     RespErr::OK => return,
                     RespErr::ErrWrongLeader => (),

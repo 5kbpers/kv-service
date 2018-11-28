@@ -67,7 +67,7 @@ impl Client {
             }
         }
         else {
-             println!("[RPC] can not connect to {}", &self.server_addr);
+//             println!("[RPC] can not connect to {}", &self.server_addr);
             return (Vec::new(), false);
         }
     }
@@ -143,7 +143,13 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
 fn handle_connection(rn : &ANetwork, mut stream: TcpStream) -> Result<(), std::io::Error> {
     let mut buffer = [0; 4096];
     let size = stream.read(&mut buffer)?;
-    let req : reqMsg = deserialize(&buffer[..size]).unwrap();
+    let req : reqMsg = match deserialize(&buffer[..size]){
+        Ok(res) => res,
+        Err(_) => {
+            println!("{:?}",&buffer[..size]);
+            return Err(std::io::Error::new(std::io::ErrorKind::Other,"a"));
+        },
+    };
 
     let replyMsg = dispatch(rn, req);
 

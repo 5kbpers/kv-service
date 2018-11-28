@@ -146,7 +146,7 @@ impl KVServer {
     fn run(mu: Arc<Mutex<KVServer>>, apply_ch: Receiver<ApplyMsg>) {
         loop {
             let msg = apply_ch.recv();
-            println!("--------receive message");
+//            println!("--------receive message");
             match msg {
                 Ok(m) => {
                     let mut kv = mu.lock().unwrap();

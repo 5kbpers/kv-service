@@ -115,7 +115,7 @@ impl Raft {
         apply_ch: &SyncSender<ApplyMsg>,
     ) -> (Arc<Mutex<Raft>>, Client, Vec<SyncSender<(Vec<u8>, bool)>>, Vec<Receiver<Vec<u8>>>) {
         let (peers, mut reply_sendv, mut req_recvv) = Self::create_server(addr, id);
-        
+        println!("AAAAAAAAAAAAAAAAAAAAAAAAAAA");
         let put_reply = reply_sendv.pop().unwrap();
         let get_reply = reply_sendv.pop().unwrap();
 
@@ -285,7 +285,7 @@ impl Raft {
             rf.election_timer.send(());
             rf.state = Follower;
             reply.vote_granted = true;
-            println!("grant server {} to {}", rf.me, args.candidate_id);
+            println!("grant server {} to {} in term {}", rf.me, args.candidate_id, args.term);
             rf.vote_for = args.candidate_id;
         }
         if reply.vote_granted == false {
@@ -343,7 +343,7 @@ impl Raft {
 //                        println!("{} get reply from {}", rf1.me, i);
                         if let Candidate = rf1.state {
                             //got voted
-                            if reply.vote_granted {
+                            if reply.vote_granted && reply.term==rf1.current_term {
                                 rf1.voted_cnt += 1;
                                 println!("{} get voted {} times", rf1.me,rf1.voted_cnt);
                                 // win
@@ -439,9 +439,9 @@ impl Raft {
                             prev_log_index:pre_index,
                         };
 
-                        // try append multiple entries
+                        //TODO: try append multiple entries, i.e., replace if with while
                         let mut next = rf.next_index[i];
-                        while next < rf.log.len() {
+                        if next < rf.log.len() {
 //                            println!("leader {} in term {} append entires at index {} for {}",rf.me,rf.current_term, next, i);
                             args.entries.push(rf.log[next].clone());
                             next += 1;

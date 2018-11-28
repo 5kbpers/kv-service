@@ -168,7 +168,7 @@ impl Raft {
     // return values: command index in the log, current term, is_leader
     pub fn start(r: Arc<Mutex<Raft>>, command: &Vec<u8>) -> (usize, u64, bool) {
         let mut rf = r.lock().unwrap();
-        println!("{} starts",rf.me);
+//        println!("{} starts",rf.me);
         let (index, term, mut is_leader) = (rf.log.len(), rf.current_term, false);
 
         if let Leader = rf.state {
@@ -176,7 +176,7 @@ impl Raft {
             let (me,current_term) = (rf.me as usize,rf.current_term);
             rf.match_index[me] = index;
             rf.log.push(LogEntry{term:current_term, command:command.clone()});
-            println!("{} is leader, return", rf.me);
+//            println!("{} is leader, return", rf.me);
         }
         (index,term,is_leader)
     }
@@ -211,7 +211,7 @@ impl Raft {
             last = args.prev_log_index;
             reply.success = true;
             if args.entries.len()>0 {
-                println!("{} get entry from {}",rf.me,args.leader_id);
+//                println!("{} get entry from {}",rf.me,args.leader_id);
                 // delete conflict entries
                 last+=args.entries.len();
                 rf.log.truncate(args.prev_log_index+1);
@@ -417,7 +417,7 @@ impl Raft {
             {
 //                 println!("broadcast before lock");
                 let rf = r.lock().unwrap();
-//                println!("leader {} broadcast", rf.me);
+                println!("leader {} broadcast", rf.me);
                 if let Leader = rf.state {
                     rf.election_timer.send(());  //reset timer so leader won't start another election
                     // broadcast
@@ -439,12 +439,14 @@ impl Raft {
                             prev_log_index:pre_index,
                         };
 
-                        //TODO: try append multiple entries, i.e., replace if with while
+                        // append multiple entries
                         let mut next = rf.next_index[i];
-                        if next < rf.log.len() {
+                        let mut cnt = 0;
+                        while next < rf.log.len() && cnt<10 {
 //                            println!("leader {} in term {} append entires at index {} for {}",rf.me,rf.current_term, next, i);
                             args.entries.push(rf.log[next].clone());
                             next += 1;
+                            cnt+=1;
                         }
 
                         // start send append rpc to each server
@@ -476,7 +478,7 @@ impl Raft {
                                     }
                                 }
                                 Err(_) => {
-                                    println!("no reply while send append request to {}", i);
+//                                    println!("no reply while send append request to {}", i);
                                 }
                             }
                         });
@@ -545,7 +547,6 @@ impl Raft {
                         index:i,
                         term:rf.log[i].term,
                     };
-                    //TODO
                      rf.apply_ch.send(msg);
                 }
             }

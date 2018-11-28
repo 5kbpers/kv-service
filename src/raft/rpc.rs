@@ -59,6 +59,9 @@ impl Client {
             let mut buffer = [0; 4096];
             if let Ok(size) = ch.read(&mut buffer) {
                 let reply : replyMsg = deserialize(&buffer[..size]).unwrap();
+                if reply.ok == false {
+                    println!("========================={:?}============================",req);
+                }
                 return (reply.reply, reply.ok);
             }
             else {
@@ -122,9 +125,14 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
             for stream in listener.incoming() {
                 match stream {
                     Ok(mut streamm) => {
-                        match handle_connection(&rnt, streamm) {
+                        match handle_connection(&rnt, &mut streamm) {
                             Ok(_) => (),
-                            Err(err) => println!("{:?}", err),
+                            Err(err) => {
+                                println!("------------------{:?}----------------", err);
+                                let reply_msg = replyMsg{ok:false,reply:vec![]};
+                                let reply_msg = serialize(&reply_msg).unwrap();
+                                let rcount = streamm.write(&reply_msg).unwrap();
+                            },
                         }
                     },
                     Err(err) => println!("{:?}", err),
@@ -140,13 +148,13 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
         rn
 }
 
-fn handle_connection(rn : &ANetwork, mut stream: TcpStream) -> Result<(), std::io::Error> {
+fn handle_connection(rn : &ANetwork, stream:&mut TcpStream) -> Result<(), std::io::Error> {
     let mut buffer = [0; 4096];
     let size = stream.read(&mut buffer)?;
     let req : reqMsg = match deserialize(&buffer[..size]){
         Ok(res) => res,
         Err(_) => {
-            println!("{:?}",&buffer[..size]);
+            println!("#####################{:?}####################",&buffer[..size]);
             return Err(std::io::Error::new(std::io::ErrorKind::Other,"a"));
         },
     };

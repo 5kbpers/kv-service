@@ -8,7 +8,7 @@ use super::super::raft::rpc::{self, Client};
 use super::common::*;
 use bincode::{serialize, deserialize};
 
-const START_TIMEOUT_INTERVAL: u64 = 400; // ms
+const START_TIMEOUT_INTERVAL: u64 = 5000; // ms
 const CALLBACK_NUMS: usize = 4;
 
 struct NotifyArgs {
@@ -93,6 +93,7 @@ impl KVServer {
                 return (result.err, result.value);
             }
             Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
+                println!("---------------------start timeout---------------------");
                 let mut kv = mu.lock().unwrap();
                 kv.notify_ch_map.remove(&index);
                 return (RespErr::ErrWrongLeader,  String::from(""));
@@ -114,6 +115,7 @@ impl KVServer {
                 Some(v) => result.value = v.clone(),
                 None => result.value = String::from(""),
             }
+            println!("--------------- get value: {} ----------------------",result.value);
         } else if args.request_type == 1 {
             let seq = self.cache.get(&args.cliend_id);
             let mut flag = true;
@@ -126,10 +128,13 @@ impl KVServer {
                 None => (),
             }
             if flag {
+                println!("-------------------put before:{}----------------------",args.value);
                 if args.op == "Put" {
+                    println!("---------------------put :{}-------------------",args.value);
                     self.data.insert(args.key, args.value);
                 } else {
                     let value = self.data.get(&args.key);
+                    println!("---------------------put :{}-------------------",args.value);
                     match value {
                         Some(v) => self.data.insert(args.key, format!("{}{}", v, args.value)),
                         None => self.data.insert(args.key, args.value),

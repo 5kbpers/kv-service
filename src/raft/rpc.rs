@@ -31,8 +31,8 @@ struct replyMsg {
 
 #[derive(Clone)]
 pub struct Client {
-    end_name : String,
-    server_addr: String,
+    pub end_name : String,
+    pub server_addr: String,
     // done : TcpStream,
 }
 
@@ -62,12 +62,12 @@ impl Client {
                 return (reply.reply, reply.ok);
             }
             else {
-                // println!("[RPC] read from {} error", &self.server_addr);
+                 println!("[RPC] read from {} error", &self.server_addr);
                 return (Vec::new(), false);
             }
         }
         else {
-            // println!("[RPC] can not connect to {}", &self.server_addr);
+             println!("[RPC] can not connect to {}", &self.server_addr);
             return (Vec::new(), false);
         }
     }

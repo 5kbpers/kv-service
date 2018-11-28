@@ -62,8 +62,8 @@ impl Clerk {
 
     fn put_append(&mut self, key: &String, value: &String, op: &String) {
         self.request_seq += 1;
-        let args = ReqArgs{
-            request_type: 0,
+        let args = ReqArgs {
+            request_type: 1,
             request_seq: self.request_seq,
             cliend_id: self.client_id,
             key: key.clone(),

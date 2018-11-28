@@ -168,6 +168,7 @@ impl Raft {
     // return values: command index in the log, current term, is_leader
     pub fn start(r: Arc<Mutex<Raft>>, command: &Vec<u8>) -> (usize, u64, bool) {
         let mut rf = r.lock().unwrap();
+        println!("{} starts",rf.me);
         let (index, term, mut is_leader) = (rf.log.len(), rf.current_term, false);
 
         if let Leader = rf.state {
@@ -175,6 +176,7 @@ impl Raft {
             let (me,current_term) = (rf.me as usize,rf.current_term);
             rf.match_index[me] = index;
             rf.log.push(LogEntry{term:current_term, command:command.clone()});
+            println!("{} is leader, return", rf.me);
         }
         (index,term,is_leader)
     }
@@ -209,6 +211,7 @@ impl Raft {
             last = args.prev_log_index;
             reply.success = true;
             if args.entries.len()>0 {
+                println!("{} get entry from {}",rf.me,args.leader_id);
                 // delete conflict entries
                 last+=args.entries.len();
                 rf.log.truncate(args.prev_log_index+1);
@@ -231,9 +234,15 @@ impl Raft {
             reply.first_index = index;
         }
 
+        // try commit
         if args.leader_commit > rf.commit_index && prev_entry_match {
-            let r1 = r.clone();
-            Self::commit_to_index(r1,std::cmp::min(args.leader_commit, last));
+            let commit_index = std::cmp::min(args.leader_commit, last);
+            if rf.commit_index<commit_index {
+                let r1 = r.clone();
+                let leader_commit = args.leader_commit;
+                thread::spawn(move || { Self::commit_to_index(r1, std::cmp::min(leader_commit, last)) });
+            }
+//            Self::commit_to_index(r1,std::cmp::min(args.leader_commit, last));
         }
 
         reply
@@ -288,6 +297,7 @@ impl Raft {
     // get current state of Raft.
     pub fn get_state(r: Arc<Mutex<Raft>>) -> (u64, bool) {
         let raft = r.lock().unwrap();
+        println!("get {} state",raft.me);
         let term = raft.current_term;
         let is_leader = match raft.state {
             Leader => true,
@@ -330,7 +340,7 @@ impl Raft {
                     // got reply
                     Ok(reply) => {
                         let mut rf1 = r1.lock().unwrap();
-                        println!("{} get reply from {}", rf1.me, i);
+//                        println!("{} get reply from {}", rf1.me, i);
                         if let Candidate = rf1.state {
                             //got voted
                             if reply.vote_granted {
@@ -405,9 +415,9 @@ impl Raft {
     fn tick_heartbeat(r: Arc<Mutex<Raft>>) {
         while true {
             {
-                // println!("broadcast before lock");
+//                 println!("broadcast before lock");
                 let rf = r.lock().unwrap();
-                println!("leader {} broadcast", rf.me);
+//                println!("leader {} broadcast", rf.me);
                 if let Leader = rf.state {
                     rf.election_timer.send(());  //reset timer so leader won't start another election
                     // broadcast
@@ -430,9 +440,11 @@ impl Raft {
                         };
 
                         // try append multiple entries
-                        let next = rf.next_index[i];
+                        let mut next = rf.next_index[i];
                         while next < rf.log.len() {
+//                            println!("leader {} in term {} append entires at index {} for {}",rf.me,rf.current_term, next, i);
                             args.entries.push(rf.log[next].clone());
+                            next += 1;
                         }
 
                         // start send append rpc to each server
@@ -448,6 +460,7 @@ impl Raft {
                                             // update index state and try to commit
                                             rf1.match_index[i] = pre_index+num_entries;
                                             rf1.next_index[i] += num_entries;
+//                                            println!("next entry for {} is {}",i,rf1.next_index[i]);
                                             let r2 = r1.clone();
                                             // try to commit new appended entries
                                             thread::spawn(move||{Self::leader_commit(r2)});
@@ -463,7 +476,7 @@ impl Raft {
                                     }
                                 }
                                 Err(_) => {
-                                    println!("no reply while send vote request to {}", i);
+                                    println!("no reply while send append request to {}", i);
                                 }
                             }
                         });
@@ -509,7 +522,7 @@ impl Raft {
         let majority = match_state[match_state.len()/2];  //match index of majority
 
         // only commit current term's entry
-        if rf.log[majority].term == rf.current_term {
+        if rf.log[majority].term == rf.current_term && rf.commit_index<majority {
             let r1 = r.clone();
             thread::spawn(move||{
                 Self::commit_to_index(r1,majority);
@@ -519,7 +532,9 @@ impl Raft {
 
     // commit index and all indices preceding index
     fn commit_to_index(r: Arc<Mutex<Raft>>,index: usize) {
+//        println!("commit lock");
         let mut rf = r.lock().unwrap();
+//        println!("{} commit start\n",rf.me);
         if rf.commit_index < index {
             for i in rf.commit_index+1..index+1 {
                 if i<rf.log.len() {
@@ -531,7 +546,7 @@ impl Raft {
                         term:rf.log[i].term,
                     };
                     //TODO
-                    // rf.apply_ch.send(msg);
+                     rf.apply_ch.send(msg);
                 }
             }
         }
@@ -629,7 +644,7 @@ mod tests {
 
     #[test]
     fn raft_test() {
-        let server_num = 5;
+        let server_num = 3;
         let mut base_port = 8810;
         let mut addrs = Vec::new();
         for i in (0..server_num) {

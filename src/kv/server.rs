@@ -115,7 +115,6 @@ impl KVServer {
                 Some(v) => result.value = v.clone(),
                 None => result.value = String::from(""),
             }
-            println!("--------------- get value: {} ----------------------",result.value);
         } else if args.request_type == 1 {
             let seq = self.cache.get(&args.cliend_id);
             let mut flag = true;
@@ -128,13 +127,10 @@ impl KVServer {
                 None => (),
             }
             if flag {
-                println!("-------------------put before:{}----------------------",args.value);
                 if args.op == "Put" {
-                    println!("---------------------put :{}-------------------",args.value);
                     self.data.insert(args.key, args.value);
                 } else {
                     let value = self.data.get(&args.key);
-                    println!("---------------------put :{}-------------------",args.value);
                     match value {
                         Some(v) => self.data.insert(args.key, format!("{}{}", v, args.value)),
                         None => self.data.insert(args.key, args.value),

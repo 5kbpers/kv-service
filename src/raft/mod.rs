@@ -8,9 +8,7 @@ use rand::Rng;
 
 use self::rpc::Client;
 use self::State::{Candidate, Follower, Leader};
-use self::storage::Storage;
 
-mod storage;
 pub mod rpc;
 mod util;
 
@@ -25,13 +23,6 @@ pub enum State {
     Follower,
     Candidate,
     Leader,
-}
-
-enum Message {
-    Shutdown,
-    Reset,
-    VoteReply(RequestVoteReply),
-    HeartbeatReply(AppendEntriesReply),
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
@@ -79,28 +70,20 @@ pub struct AppendEntriesReply {
 }
 
 pub struct Raft {
-    storage: Storage,  // object to hold this peer's persisted state
     peers: Vec<Client>,     // id of all peers
     pub me: i32,        // this peer's id, index of peers vec
-    leader_id: i32,     // leader's id
     pub state: State,   // current state of this peer
     apply_ch: SyncSender<ApplyMsg>,
 
     pub current_term: u64,  // latest term server has seen (initialized to 0 on first boot, increases monotonically)
     vote_for: i32,          // candidateId that received vote in current term (or -1 if none)
     commit_index: usize,      // index of highest log entry known to be committed (initialized to 0, increases monotonically)
-    last_applied: u64,      // index of highest log entry applied to state machine (initialized to 0, increases monotonically)
     log: Vec<LogEntry>,     // log entries (first index is 1)
 
     pub next_index: Vec<usize>, // for each server, index of the next log entry to send to that server (initialized to leader last log index + 1)
     pub match_index: Vec<usize>, // for each server, index of highest log entry known to be replicated on server (initialized to 0, increases monotonically)
 
-    last_included_index: u64, // index of the last entry in the log that snapshot replaces (initialized to 0)
-    last_included_term: u64, // term of lastIncludedIndex
-
     election_timer: SyncSender<()>,
-//    notify_apply_ch: SyncSender<()>,
-//    message_ch: SyncSender<Message>,
 
     pub voted_cnt: i32, // voted count during a election
 
@@ -115,7 +98,6 @@ impl Raft {
         apply_ch: &SyncSender<ApplyMsg>,
     ) -> (Arc<Mutex<Raft>>, Client, Vec<SyncSender<(Vec<u8>, bool)>>, Vec<Receiver<Vec<u8>>>) {
         let (peers, mut reply_sendv, mut req_recvv) = Self::create_server(addr, id);
-        println!("AAAAAAAAAAAAAAAAAAAAAAAAAAA");
         let put_reply = reply_sendv.pop().unwrap();
         let get_reply = reply_sendv.pop().unwrap();
 
@@ -127,26 +109,19 @@ impl Raft {
 //        let (ms, mr) = mpsc::sync_channel(1);
         let (ts, tr) = mpsc::sync_channel(1);
         let mut r = Raft {
-            storage: Storage::new(),
             peers: peers,
             me: id,
-            leader_id: -1,
             state: Follower,
             apply_ch: apply_ch.clone(),
             current_term: 0,
             vote_for: -1,
             commit_index: 0,
-            last_applied: 0,
             log: vec![LogEntry {
                 term: 0,
                 command: Vec::new(),
             }],
             next_index: Vec::new(),
             match_index: Vec::new(),
-            last_included_index: 0,
-            last_included_term: 0,
-//            notify_apply_ch: ns,
-//            message_ch: ms,
             voted_cnt: 0,
             election_timer: ts,
             reply_sender : reply_sendv,
@@ -195,7 +170,7 @@ impl Raft {
         if args.term < rf.current_term { // expired leader
             return reply;
         }
-        rf.election_timer.send(());   // valid leader, reset election timeout
+        rf.election_timer.send(()).unwrap();   // valid leader, reset election timeout
 
         if args.term > rf.current_term{
             rf.current_term = args.term;
@@ -282,7 +257,7 @@ impl Raft {
         }
 
         if rf.vote_for == -1 {
-            rf.election_timer.send(());
+            rf.election_timer.send(()).unwrap();
             rf.state = Follower;
             reply.vote_granted = true;
             println!("grant server {} to {} in term {}", rf.me, args.candidate_id, args.term);
@@ -306,15 +281,6 @@ impl Raft {
         (term, is_leader)
     }
 
-    // kill this peer.
-    pub fn kill(r: Arc<Mutex<Raft>>) {}
-
-    // save current Raft state to stable storage.
-    fn persist(&self) {}
-
-    // read Raft state from stable storage.
-    fn read_persist(&mut self, data: &Vec<u8>) {}
-
     // leader election.
     fn campaign(r: Arc<Mutex<Raft>>) {
         let mut rf = r.lock().unwrap();
@@ -336,7 +302,7 @@ impl Raft {
             let args = RequestVoteArgs { term: rf.current_term, candidate_id: rf.me, last_log_index: last_index, last_log_term: last_term };
             // send requests
             thread::spawn(move || {
-                match Self::send_request_vote(&client, i as i32, args) {
+                match Self::send_request_vote(&client, args) {
                     // got reply
                     Ok(reply) => {
                         let mut rf1 = r1.lock().unwrap();
@@ -367,14 +333,14 @@ impl Raft {
                                 println!("{} didnt get voted from {}", rf1.me, i);
                                 if reply.term > rf1.current_term {
                                     rf1.state = Follower;
-                                    rf1.election_timer.send(());  // reset timer
+                                    rf1.election_timer.send(()).unwrap();  // reset timer
                                     rf1.current_term = reply.term;
                                 }
                             }
                         }
                     }
-                    Err(_) => {
-                        // println!("no reply while send vote request to {}", i);
+                    Err(err) => {
+                         println!("no reply while send vote request to {}, error:{:?}", i, err);
                     }
                 }
             });
@@ -382,9 +348,9 @@ impl Raft {
     }
 
     // call AppendEntries RPC of one peer.
-    fn send_append_entries(client:&Client, id: i32, args: AppendEntriesArgs) -> Result<AppendEntriesReply, &'static str> {
+    fn send_append_entries(client:&Client, args: AppendEntriesArgs) -> Result<AppendEntriesReply, &'static str> {
         let req = serialize(&args).unwrap();
-        let (reply, success) = client.Call(String::from("Raft.AppendEntries"),req);
+        let (reply, success) = client.call(String::from("Raft.AppendEntries"),req);
         if success {
             let reply: AppendEntriesReply = deserialize(&reply).unwrap();
             return Ok(reply);
@@ -393,10 +359,10 @@ impl Raft {
     }
 
     // call RequestVote RPC of one peer.
-    fn send_request_vote(client: &Client, id: i32, args: RequestVoteArgs) -> Result<RequestVoteReply, &'static str> {
+    fn send_request_vote(client: &Client, args: RequestVoteArgs) -> Result<RequestVoteReply, &'static str> {
 //        let reply = RequestVoteReply{term:0, vote_granted:false};
         let req = serialize(&args).unwrap();
-        let (reply, success) = client.Call(String::from("Raft.RequestVote"), req);
+        let (reply, success) = client.call(String::from("Raft.RequestVote"), req);
         if success {
             let reply: RequestVoteReply = deserialize(&reply).unwrap();
             return Ok(reply);
@@ -404,22 +370,17 @@ impl Raft {
         Err("get request vote rpc reply error")
     }
 
-    // send committed log to apply.
-    fn apply(r: Arc<Mutex<Raft>>) {
-
-    }
-
     // send heartbeat to followers within a given time interval.
     // only call by leader.
     // heartbeats include append_entries rpc
     fn tick_heartbeat(r: Arc<Mutex<Raft>>) {
-        while true {
+        loop {
             {
 //                 println!("broadcast before lock");
                 let rf = r.lock().unwrap();
                 println!("leader {} broadcast", rf.me);
                 if let Leader = rf.state {
-                    rf.election_timer.send(());  //reset timer so leader won't start another election
+                    rf.election_timer.send(()).unwrap();  //reset timer so leader won't start another election
                     // broadcast
                     for i in 0..rf.peers.len() {
                         if i == rf.me as usize {
@@ -454,7 +415,7 @@ impl Raft {
                         let client = rf.peers[i].clone();
                         thread::spawn(move||{
                             let num_entries = args.entries.len();
-                            match Self::send_append_entries(&client, i as i32, args) {
+                            match Self::send_append_entries(&client, args) {
                                 Ok(reply) => {
                                     let mut rf1 = r1.lock().unwrap();
                                     if let Leader = rf1.state {
@@ -469,7 +430,7 @@ impl Raft {
                                         } else {
                                             if reply.term > rf1.current_term { // leader expired
                                                 rf1.state = Follower;
-                                                rf1.election_timer.send(());
+                                                rf1.election_timer.send(()).unwrap();
                                                 rf1.current_term = reply.term;
                                             } else { // update next entry according to reply
                                                 rf1.next_index[i] = reply.first_index;
@@ -477,8 +438,8 @@ impl Raft {
                                         }
                                     }
                                 }
-                                Err(_) => {
-//                                    println!("no reply while send append request to {}", i);
+                                Err(err) => {
+                                    println!("no reply while send append request to {}, error:{:?}", i, err);
                                 }
                             }
                         });
@@ -493,7 +454,7 @@ impl Raft {
 
     // start election after timeout.
     fn tick_election(receiver: Receiver<()>, r: Arc<Mutex<Raft>>) {
-        while true {
+        loop {
             match receiver.recv_timeout(Self::random_timeout(MIN_TIMEOUT, MAX_TIMEOUT)) {
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => {
@@ -547,19 +508,11 @@ impl Raft {
                         index:i,
                         term:rf.log[i].term,
                     };
-                     rf.apply_ch.send(msg);
+                     rf.apply_ch.send(msg).unwrap();
                 }
             }
         }
     }
-
-    // send log entries to followers.
-    // only call by leader.
-    fn replicate(&self) {}
-
-    // send log entries to one follower.
-    // only call by leader.
-    fn send_log_entries(&self, id: i32) {}
 
     fn last_index(&self) -> usize {
         self.log.len() - 1
@@ -580,7 +533,7 @@ impl Raft {
                 
                 let req : RequestVoteArgs = deserialize(&args[..]).unwrap();
                 let reply = Self::request_vote(&rr, &req);
-                let vote_granted = reply.vote_granted;
+//                let vote_granted = reply.vote_granted;
                 let reply = serialize(&reply).unwrap();
 
                 let r1 = rr.lock().unwrap();
@@ -609,7 +562,7 @@ impl Raft {
         let mut req_recvv = Vec::new();
         let mut reply_recvv = Vec::new();
         
-        for i in (0..CALLBACK_NUMS) {
+        for _i in 0..CALLBACK_NUMS {
             let (req_send, req_recv) = sync_channel(1);
             let (reply_send, reply_recv) = sync_channel(1);
 
@@ -625,7 +578,7 @@ impl Raft {
         thread::sleep(Duration::from_secs(1));
 
         let mut clients = Vec::new();
-        for j in (0..addrs.len()) {
+        for j in 0..addrs.len() {
             // if cur_id as usize == j {
             //     clients.push(Client::new());
             // } else {

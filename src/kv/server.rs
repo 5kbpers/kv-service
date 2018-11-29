@@ -4,12 +4,11 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, SyncSender, Receiver, RecvTimeoutError};
 use super::super::raft::{Raft, ApplyMsg};
-use super::super::raft::rpc::{self, Client};
+use super::super::raft::rpc::Client;
 use super::common::*;
 use bincode::{serialize, deserialize};
 
 const START_TIMEOUT_INTERVAL: u64 = 5000; // ms
-const CALLBACK_NUMS: usize = 4;
 
 struct NotifyArgs {
     term: u64,
@@ -18,9 +17,7 @@ struct NotifyArgs {
 }
 
 pub struct KVServer {
-    me: i32,
     rf: Arc<Mutex<Raft>>,
-    maxraftstate: u64,
 
     data: HashMap<String, String>,
     cache: HashMap<u64, u64>,
@@ -31,14 +28,12 @@ impl KVServer {
     pub fn new(
         id: i32,
         addrs: &Vec<String>,
-        maxraftstate: u64,
+//        maxraftstate: u64,
         ) -> Client {
         let (s, r) = mpsc::sync_channel(1000);
         let (rf, client, reply_sender, req_recv)= Raft::new(id, addrs, &s);
         let kv = KVServer {
-            me: id,
             rf,
-            maxraftstate,
             data: HashMap::new(),
             cache: HashMap::new(),
             notify_ch_map: HashMap::new(),
@@ -63,7 +58,7 @@ impl KVServer {
 
     fn notify_if_present(&mut self, index: usize, reply: NotifyArgs) {
         if let Some(sch) = self.notify_ch_map.get(&index) {
-            sch.send(reply);
+            sch.send(reply).unwrap();
         }
         self.notify_ch_map.remove(&index);
     }
@@ -102,7 +97,7 @@ impl KVServer {
     }
 
     fn apply(&mut self, msg :&ApplyMsg) {
-        println!("---------------apply");
+//        println!("---------------apply");
         let mut result = NotifyArgs{
             term: msg.term,
             value: String::from(""),

@@ -17,7 +17,7 @@ mod tests {
         for i in (0..5) {
             let addrs2 = addrs.clone();
             thread::spawn(move||{
-                server::KVServer::new(i as i32, &addrs2, 100);
+                server::KVServer::new(i as i32, &addrs2);
             });
             clients.push(Client{end_name: String::from(""), server_addr: addrs[i].clone()});
         }
@@ -37,7 +37,7 @@ mod tests {
         for i in (0..3) {
             let addrs2 = addrs.clone();
             thread::spawn(move||{
-                server::KVServer::new(i as i32, &addrs2, 100);
+                server::KVServer::new(i as i32, &addrs2);
             });
         }
         for i in (0..5) {
@@ -51,7 +51,7 @@ mod tests {
         println!("---------------------get key1 value: {}----------", v);
         let addrs2 = addrs.clone();
         thread::spawn(move||{
-            server::KVServer::new(3, &addrs2, 100);
+            server::KVServer::new(3, &addrs2);
         });
         println!("---------------------put key: key2---------------------");
         clerk.put(&String::from("key2"), &String::from("value2"));
@@ -61,7 +61,7 @@ mod tests {
         println!("---------------------get key1 value: {}----------", v);
         let addrs2 = addrs.clone();
         thread::spawn(move||{
-            server::KVServer::new(4, &addrs2, 100);
+            server::KVServer::new(4, &addrs2);
         });
         println!("---------------------put key: key3---------------------");
         clerk.put(&String::from("key3"), &String::from("value3"));

@@ -5,17 +5,15 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use std::thread;
-use std::sync::mpsc::sync_channel;
 use std::sync::mpsc::SyncSender;
 use std::sync::mpsc::Receiver;
 use std::sync::{Mutex, Arc};
 
-use crate::raft::Raft;
 
-const CALLBACK_NUMS : u32 = 2;
+//const CALLBACK_NUMS : u32 = 2;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct reqMsg {
+struct ReqMsg {
     end_name : String,
     svc_meth : String,
     args_type : String,
@@ -24,7 +22,7 @@ struct reqMsg {
 
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct replyMsg {
+struct ReplyMsg {
     ok : bool,
     reply : Vec<u8>,
 }
@@ -44,8 +42,8 @@ impl Client {
         }
     }
 
-    pub fn Call(&self, svc_meth : String, args : Vec<u8>) -> (Vec<u8>, bool) {
-        let req = reqMsg {
+    pub fn call(&self, svc_meth : String, args : Vec<u8>) -> (Vec<u8>, bool) {
+        let req = ReqMsg {
             end_name : self.end_name.clone(),
             svc_meth : svc_meth,
             args_type : String::from("bin"),
@@ -58,9 +56,8 @@ impl Client {
 
             let mut buffer = [0; 4096];
             if let Ok(size) = ch.read(&mut buffer) {
-                let reply : replyMsg = deserialize(&buffer[..size]).unwrap();
+                let reply : ReplyMsg = deserialize(&buffer[..size]).unwrap();
                 if reply.ok == false {
-                    println!("========================={:?}============================",req);
                 }
                 return (reply.reply, reply.ok);
             }
@@ -79,14 +76,14 @@ impl Client {
 // #[derive(Debug)]
 pub struct Network {
     addr    :       String,
-    reliable    :   bool,
-    long_delays   :  bool,                        // pause a long time on send on disabled connection
-    long_reordering : bool,                        // sometimes delay replies a long time
+    pub reliable    :   bool,
+    pub long_delays   :  bool,                        // pause a long time on send on disabled connection
+    pub long_reordering : bool,                        // sometimes delay replies a long time
     ends     :      Mutex<HashMap<String, bool>>,  // ends, by name
     servers    :    HashMap<String, bool>,     // servers, by name
     // enabled   :     HashMap<String, bool>,        // by end name
     // connections  :  HashMap<String, String>, // end_name -> servername
-    // endCh    :      (Sender<reqMsg>, Receiver<reqMsg>),
+    // endCh    :      (Sender<ReqMsg>, Receiver<ReqMsg>),
     // done      :     (Sender<()>, Receiver<()>), // closed when Network is cleaned up
     count     :     Mutex<u32>,
     req_send : Vec<SyncSender<Vec<u8>>>,
@@ -127,11 +124,7 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
                     Ok(mut streamm) => {
                         match handle_connection(&rnt, &mut streamm) {
                             Ok(_) => (),
-                            Err(err) => {
-                                println!("------------------{:?}----------------", err);
-                                let reply_msg = replyMsg{ok:false,reply:vec![]};
-                                let reply_msg = serialize(&reply_msg).unwrap();
-                                let rcount = streamm.write(&reply_msg).unwrap();
+                            Err(_err) => {
                             },
                         }
                     },
@@ -151,40 +144,39 @@ pub fn make_network(addr : String, req_send : Vec<SyncSender<Vec<u8>>>, reply_re
 fn handle_connection(rn : &ANetwork, stream:&mut TcpStream) -> Result<(), std::io::Error> {
     let mut buffer = [0; 4096];
     let size = stream.read(&mut buffer)?;
-    let req : reqMsg = match deserialize(&buffer[..size]){
+    let req : ReqMsg = match deserialize(&buffer[..size]){
         Ok(res) => res,
         Err(_) => {
-            println!("#####################{:?}####################",&buffer[..size]);
             return Err(std::io::Error::new(std::io::ErrorKind::Other,"a"));
         },
     };
 
-    let replyMsg = dispatch(rn, req);
+    let reply_msg = dispatch(rn, req);
 
-    let replyMsg = serialize(&replyMsg).unwrap();
+    let reply_msg = serialize(&reply_msg).unwrap();
 
-    let rcount = stream.write(&replyMsg)?;
+    stream.write(&reply_msg)?;
     Ok(())
 }
 
-fn dispatch(rn : &ANetwork, req : reqMsg) -> replyMsg {
+fn dispatch(rn : &ANetwork, req : ReqMsg) -> ReplyMsg {
     let mut count = rn.count.lock().unwrap();
     *count += 1;
 
     let dot = req.svc_meth.find('.').unwrap();
 
-    let serviceName = &req.svc_meth[..dot];
-    let methodName = &req.svc_meth[dot+1..];
+    let service_name = &req.svc_meth[..dot];
+    let method_name = &req.svc_meth[dot+1..];
 
-    if let Some(service) = rn.servers.get(serviceName) {
-        match methodName {
+    if let Some(_service) = rn.servers.get(service_name) {
+        match method_name {
             "RequestVote" => {
                 rn.req_send[0].send(req.args).unwrap();
                 let rch_tmp = rn.reply_recv.clone();
                 let rch = rch_tmp.lock().unwrap();
 
                 let (reply, ok) = rch[0].recv().unwrap();
-                return replyMsg {
+                return ReplyMsg {
                     ok : ok,
                     reply : reply,
                 };
@@ -195,7 +187,7 @@ fn dispatch(rn : &ANetwork, req : reqMsg) -> replyMsg {
                 let rch = rch_tmp.lock().unwrap();
 
                 let (reply, ok) = rch[1].recv().unwrap();
-                return replyMsg {
+                return ReplyMsg {
                     ok : ok,
                     reply : reply,
                 };
@@ -206,7 +198,7 @@ fn dispatch(rn : &ANetwork, req : reqMsg) -> replyMsg {
                 let rch = rch_tmp.lock().unwrap();
 
                 let (reply, ok) = rch[2].recv().unwrap();
-                return replyMsg {
+                return ReplyMsg {
                     ok : ok,
                     reply : reply,
                 };
@@ -217,24 +209,24 @@ fn dispatch(rn : &ANetwork, req : reqMsg) -> replyMsg {
                 let rch = rch_tmp.lock().unwrap();
 
                 let (reply, ok) = rch[3].recv().unwrap();
-                return replyMsg {
+                return ReplyMsg {
                     ok : ok,
                     reply : reply,
                 };
             },
             _ => {
                 println!("labrpc.Server.dispatch(): unknown method {} in {}.{}; expecting one of {:?}",
-                serviceName, serviceName, methodName, &rn.servers);
+                service_name, service_name, method_name, &rn.servers);
             },
         };
-        return replyMsg {
+        return ReplyMsg {
             ok : true,
             reply : Vec::new(),
         };
     } else {
         println!("labrpc.Server.dispatch(): unknown service {} in {}.{}; expecting one of {:?}",
-        serviceName, serviceName, methodName, &rn.servers);
-        return replyMsg {
+        service_name, service_name, method_name, &rn.servers);
+        return ReplyMsg {
             ok : false,
             reply : Vec::new(),
         };
@@ -416,7 +408,7 @@ mod tests {
 
         let araft = servers[0].clone();
         let raft0 = araft.lock().unwrap();
-        raft0.peers[1].Call(String::from("Raft.RequestVote"), req);
+        raft0.peers[1].call(String::from("Raft.RequestVote"), req);
 
         println!("[RPC] test ok");
     }

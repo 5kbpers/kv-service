@@ -33,7 +33,7 @@ impl Clerk {
         let req = serialize(&args).unwrap();
         loop {
 //            println!("--------send get rpc to {}", self.leader_id);
-            let (reply, success) = self.servers[self.leader_id as usize].Call(
+            let (reply, success) = self.servers[self.leader_id as usize].call(
                 String::from("KV.Get"),
                 req.clone(),
                 );
@@ -73,7 +73,7 @@ impl Clerk {
         let req = serialize(&args).unwrap();
         loop {
 //            println!("--------send put rpc to {}", self.leader_id);
-            let (reply, success) = self.servers[self.leader_id as usize].Call(
+            let (reply, success) = self.servers[self.leader_id as usize].call(
                 String::from("KV.PutAppend"),
                 req.clone(),
                 );
